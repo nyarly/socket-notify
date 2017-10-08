@@ -1,0 +1,6 @@
+[package]
+name = "socket-notify"
+version = "0.1.0"
+authors = ["Judson <nyarly@gmail.com>"]
+
+[dependencies]
