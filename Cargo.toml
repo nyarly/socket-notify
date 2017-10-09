@@ -4,3 +4,5 @@ version = "0.1.0"
 authors = ["Judson <nyarly@gmail.com>"]
 
 [dependencies]
+regex = "0.2"
+notify-rust = "3"
