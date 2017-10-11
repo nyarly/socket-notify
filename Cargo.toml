@@ -3,6 +3,7 @@ name = "socket-notify"
 version = "0.1.0"
 authors = ["Judson <nyarly@gmail.com>"]
 description = "Reads (scdaemon) messages from a socket, emits notifications to remind you to touch your yubikey."
+license = "MIT"
 
 [dependencies]
 regex = "0.2"
