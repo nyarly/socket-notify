@@ -1,76 +1,61 @@
 extern crate regex;
 extern crate notify_rust;
 
-use std::os::unix::net::UnixStream;
-use std::{fmt, error};
-use std::process::exit;
-use std::fs::File;
+#[macro_use]
+extern crate error_chain;
+
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::fs::{self, File};
+use std::thread;
+use std::path::Path;
 use std::io::Write;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 
 use regex::RegexSet;
 use notify_rust::Notification;
 
-#[derive(Debug)]
-enum Error {
-  Io(io::Error),
-  Regex(regex::Error),
-}
-
-impl fmt::Display for Error {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    match *self {
-      Error::Io(ref err) => write!(f, "{:?}", err),
-      Error::Regex(ref err) => write!(f, "{:?}", err),
+mod errors {
+  error_chain!{
+    foreign_links {
+      Regex(::regex::Error);
+      Io(::std::io::Error);
     }
   }
 }
 
-impl error::Error for Error {
-  fn description(&self) -> &str {
-    match *self {
-      Error::Io(ref err) => err.description(),
-      Error::Regex(ref err) => err.description(),
-    }
+use errors::*;
+
+quick_main!(main_loop);
+
+fn main_loop() -> Result<()> {
+  let socket_path = "/tmp/scdaemon.sock";
+  let log_path = "/tmp/scdaemon.log";
+
+  // *******
+  let socket = Path::new(socket_path);
+
+  // Delete old socket if necessary
+  if socket.exists() {
+    fs::remove_file(&socket)?;
   }
 
-  fn cause(&self) -> Option<&error::Error> {
-    match *self {
-      Error::Io(ref err) => Some(err),
-      Error::Regex(ref err) => Some(err),
-    }
+  // Bind to socket
+  let stream = match UnixListener::bind(&socket) {
+    Err(_) => panic!("failed to bind socket"),
+    Ok(stream) => stream,
+  };
+
+  // Iterate over clients, blocks if no client available
+  for client in stream.incoming() {
+    let log_string = log_path.to_string();
+    thread::spawn(|| handle_client(client.unwrap(), log_string));
   }
+  return Ok(());
 }
 
-impl From<io::Error> for Error {
-  fn from(err: io::Error) -> Error {
-    Error::Io(err)
-  }
-}
-
-impl From<regex::Error> for Error {
-  fn from(err: regex::Error) -> Error {
-    Error::Regex(err)
-  }
-}
-
-
-fn main() {
-  // nc -lU /tmp/scdaemon.sock
-
-  match main_loop("/tmp/scdaemon.sock", "/tmp/scdaemon.log") {
-    Ok(_) => exit(0),
-    Err(err) => {
-      write!(io::stderr(), "{}", err).unwrap();
-      exit(1)
-    }
-  }
-}
-
-fn main_loop(socket_path: &str, log_path: &str) -> Result<String, Error> {
-  let socket = UnixStream::connect(socket_path)?;
+fn handle_client(client: UnixStream, log_path: String) -> Result<()> {
   let mut log = File::create(log_path)?;
-  let lines = BufReader::new(socket).lines();
+  let lines = BufReader::new(client).lines();
 
   let match_set = RegexSet::new(&[r"PK(SIGN|AUTH)", r"result: Success", r"result: "])?;
   let mut notes = Vec::new();
@@ -78,7 +63,7 @@ fn main_loop(socket_path: &str, log_path: &str) -> Result<String, Error> {
   // | while read line; do
   for line_result in lines {
     let line = line_result?;
-    write!(log, "{}", line).ok();
+    writeln!(log, "{}", line).ok();
     let matches = match_set.matches(&line);
     if matches.matched(0) {
       let note = Notification::new()
@@ -88,43 +73,35 @@ fn main_loop(socket_path: &str, log_path: &str) -> Result<String, Error> {
         .timeout(30000)
         .finalize();
 
+      writeln!(log, "Request for signature: notifying.").unwrap_or(());
       match note.show() {
         Ok(handle) => notes.push(handle),
-        Err(err) => write!(log, "Problem notifying about socket message: {}", err).unwrap_or(()),
+        Err(err) => writeln!(log, "Problem notifying about socket message: {}", err).unwrap_or(()),
       };
       continue;
     }
     if matches.matched(1) {
-      write!(log, "Recieved success report on socket, notifying").ok();
+      writeln!(log, "Recieved success report on socket, notifying").ok();
       match notes.pop() {
         Some(ref mut handle) => {
           handle.body("Accepted!").timeout(200);
           handle.update()
         }
-        None => write!(log, "No matching notification to update.").unwrap_or(()),
+        None => writeln!(log, "No matching notification to update.").unwrap_or(()),
       }
       continue;
     }
     if matches.matched(2) {
-      write!(log, "Recieved failure report on socket, notifying").ok();
+      writeln!(log, "Recieved failure report on socket, notifying").ok();
       match notes.pop() {
         Some(ref mut handle) => {
           handle.body("FAILED!").timeout(500);
           handle.update()
         }
-        None => write!(log, "No matching notification to update.").unwrap_or(()),
+        None => writeln!(log, "No matching notification to update.").unwrap_or(()),
       }
       continue;
     }
   }
-
-  return Ok("done".to_string());
-
-  // if echo $line | egrep -q 'PK(SIGN|AUTH)'; then
-  // notify-send "GPG activity" "A process is waiting on the Yubikey!"
-  // echo "Notifying" >> /tmp/scdaemon.log
-  // fi
-  // echo $line >> /tmp/scdaemon.log
-  // done
-  //
+  return Ok(());
 }

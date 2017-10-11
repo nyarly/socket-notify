@@ -2,7 +2,9 @@
 name = "socket-notify"
 version = "0.1.0"
 authors = ["Judson <nyarly@gmail.com>"]
+description = "Reads (scdaemon) messages from a socket, emits notifications to remind you to touch your yubikey."
 
 [dependencies]
 regex = "0.2"
 notify-rust = "3"
+error-chain = "0.11.0"
