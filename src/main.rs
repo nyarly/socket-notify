@@ -1,9 +1,6 @@
 extern crate regex;
 extern crate notify_rust;
 
-#[macro_use]
-extern crate error_chain;
-
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::fs::{self, File};
 use std::thread;
@@ -15,19 +12,16 @@ use regex::RegexSet;
 use notify_rust::Notification;
 
 mod errors {
-  error_chain!{
-    foreign_links {
-      Regex(::regex::Error);
-      Io(::std::io::Error);
+    #[derive(thiserror::Error, Debug)]
+    pub enum Error {
+        #[error("Error processing Regex: ${0:?}")]
+        Regex(#[from] ::regex::Error),
+        #[error("IO Error: ${0:?}")]
+        Io(#[from] ::std::io::Error)
     }
-  }
 }
 
-use errors::*;
-
-quick_main!(main_loop);
-
-fn main_loop() -> Result<()> {
+fn main() -> Result<(), errors::Error> {
   let socket_path = "/tmp/scdaemon.sock";
   let log_path = "/tmp/scdaemon.log";
 
@@ -36,11 +30,11 @@ fn main_loop() -> Result<()> {
 
   // Delete old socket if necessary
   if socket.exists() {
-    fs::remove_file(&socket)?;
+    fs::remove_file(socket)?;
   }
 
   // Bind to socket
-  let stream = match UnixListener::bind(&socket) {
+  let stream = match UnixListener::bind(socket) {
     Err(_) => panic!("failed to bind socket"),
     Ok(stream) => stream,
   };
@@ -50,14 +44,14 @@ fn main_loop() -> Result<()> {
     let log_string = log_path.to_string();
     thread::spawn(|| handle_client(client.unwrap(), log_string));
   }
-  return Ok(());
+  Ok(())
 }
 
-fn handle_client(client: UnixStream, log_path: String) -> Result<()> {
+fn handle_client(client: UnixStream, log_path: String) -> Result<(), errors::Error> {
   let mut log = File::create(log_path)?;
   let lines = BufReader::new(client).lines();
 
-  let match_set = RegexSet::new(&[r"PK(SIGN|AUTH)", r"result: Success", r"result: "])?;
+  let match_set = RegexSet::new([r"PK(SIGN|AUTH)", r"result: Success", r"result: "])?;
   let mut notes = Vec::new();
 
   // | while read line; do
@@ -103,5 +97,5 @@ fn handle_client(client: UnixStream, log_path: String) -> Result<()> {
       continue;
     }
   }
-  return Ok(());
+  Ok(())
 }
